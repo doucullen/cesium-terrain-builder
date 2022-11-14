@@ -51,6 +51,11 @@
 #include "RasterIterator.hpp"
 #include "TerrainIterator.hpp"
 
+//#include "API/PIEEnvironment.h"
+//#include "API/PIETileStorage.h"
+//
+//PIE_TileStorageH globalTileSorage = nullptr;
+
 using namespace std;
 using namespace ctb;
 
@@ -73,6 +78,8 @@ public:
     startZoom(-1),
     endZoom(-1),
     verbosity(1),
+	compress(0),
+    waterMaskDir(""),
     resume(false)
   {}
 
@@ -138,6 +145,48 @@ public:
   }
 
   static void
+	setCompress(command_t* command) {
+	static_cast<TerrainBuild *>(Command::self(command))->compress = atoi(command->arg);
+	ctb::Terrain::Compress = static_cast<TerrainBuild *>(Command::self(command))->compress;
+  }
+
+  static void
+      setWaterMaskDir(command_t* command) {
+      static_cast<TerrainBuild*>(Command::self(command))->waterMaskDir = command->arg;
+      ctb::Terrain::WaterMaskDir = static_cast<TerrainBuild*>(Command::self(command))->waterMaskDir;
+      VSIStatBufL stat;
+      if (!VSIStatExL(ctb::Terrain::WaterMaskDir.c_str(), &stat, VSI_STAT_EXISTS_FLAG | VSI_STAT_NATURE_FLAG))
+      {
+          size_t pos = std::string(ctb::Terrain::WaterMaskDir).find("_alllayers");
+          if (pos != std::string::npos) {
+              std::string inputPath(ctb::Terrain::WaterMaskDir);
+              // ??¨¨? _alllayers o¨®??¦Ì??¡¤??
+              std::string zoomStr = inputPath.substr(pos + 10);
+
+              // ¨¨£¤¦Ì??¡¤???D¦Ì? '/' ¡Á?¡¤?
+              zoomStr.erase(std::remove(zoomStr.begin(), zoomStr.end(), '/'), zoomStr.end());
+
+              // ?¨¬2¨¦¨º?¡¤??¨¦¨°?¡Áa???a¨ºy¡Á?
+              if (!zoomStr.empty() && std::all_of(zoomStr.begin(), zoomStr.end(), ::isdigit)) {
+                  // ?¨¦¨°?¡Áa???a¨ºy¡Á?¡ê?¡Áa??2¡é¨¦¨¨???? Terrain::WaterMaskZoom
+                  Terrain::WaterMaskZoom = std::stoi(zoomStr);
+
+                  ctb::Terrain::bUseWaterMask = true;
+              }
+
+              // ¡ã¨¹o? _alllayers ???t?D¡ê???¨¨? _alllayers ???¡ã¦Ì??¡¤??
+              std::string pathBeforeAllLayers = std::string(ctb::Terrain::WaterMaskDir).substr(0, pos + 10); // ?¨®¨¦? "_alllayers/"
+              // pathBeforeAllLayers ???¨²¡ã¨¹o? _alllayers ?a¨°?2?????
+              // ctb::Terrain::WaterMaskDir ¨°2¡À??¨¹D??a pathBeforeAllLayers
+              static_cast<TerrainBuild*>(Command::self(command))->waterMaskDir = pathBeforeAllLayers.c_str();
+              ctb::Terrain::WaterMaskDir = pathBeforeAllLayers.c_str();
+          }
+      }
+      //ctb::Terrain::WaterMaskDir = static_cast<TerrainBuild*>(Command::self(command))->waterMaskDir;
+
+  }
+
+  static void
   setResume(command_t* command) {
     static_cast<TerrainBuild *>(Command::self(command))->resume = true;
   }
@@ -200,6 +249,7 @@ public:
 
   const char *outputDir,
     *outputFormat,
+    *waterMaskDir,
     *profile;
 
   int threadCount,
@@ -208,8 +258,11 @@ public:
     endZoom,
     verbosity;
 
+  bool compress;
+  bool useWaterMask;
   bool resume;
 
+  //std::string waterMaskDir;
   CPLStringList creationOptions;
   TilerOptions tilerOptions;
 };
@@ -222,6 +275,7 @@ public:
 static string
 getTileFilename(const TileCoordinate *coord, const string dirname, const char *extension) {
   static mutex mutex;
+
   VSIStatBufL stat;
   string filename = concat(dirname, coord->zoom, osDirSep, coord->x);
 
@@ -391,6 +445,30 @@ buildGDAL(const RasterTiler &tiler, TerrainBuild *command) {
   }
 }
 
+static unsigned char *createTileBuffer(
+	const std::vector<ctb::i_terrain_height> &heights,
+	char children,
+	const std::vector<char> &mask,
+	size_t &size)
+{
+	if (heights.empty() || mask.empty()) {
+		size = 0;
+		return nullptr;
+	}
+
+	const size_t n1 = heights.size() * sizeof(ctb::i_terrain_height);
+	const size_t n2 = 1;
+	const size_t n3 = mask.size();
+	size = n1 + n2 + n3;
+
+	unsigned char *data = new unsigned char[size];
+	memcpy(data, heights.data(), n1);
+	memcpy(data + n1, &children, n2);
+	memcpy(data + n1 + n2, mask.data(), n3);
+
+	return data;
+}
+
 /// Output terrain tiles represented by a tiler to a directory
 static void
 buildTerrain(const TerrainTiler &tiler, TerrainBuild *command) {
@@ -401,25 +479,56 @@ buildTerrain(const TerrainTiler &tiler, TerrainBuild *command) {
   TerrainIterator iter(tiler, startZoom, endZoom);
   int currentIndex = incrementIterator(iter, 0);
   setIteratorSize(iter);
-
   while (!iter.exhausted()) {
     const TileCoordinate *coordinate = iter.GridIterator::operator*();
-    const string filename = getTileFilename(coordinate, dirname, "terrain");
+	//TerrainTile *tile = *iter;
 
+	/*
+	PIE_TileStorage_SetFileDirectory(globalTileSorage, dirname.data());
+
+	size_t size = 0;
+	unsigned char *data = createTileBuffer(tile->getHeights(), tile->getChildren(), tile->getMask(), size);
+	if (size != 0 && data) {
+		int zoom = coordinate->zoom;
+		int row = coordinate->y;
+		if (command->tms)
+		{
+			row = (1 << zoom) - coordinate->y - 1;
+		}
+		int col = coordinate->x;
+		PIE_TileStorage_SetTileData(globalTileSorage, zoom, row, col, data, size);
+		delete data;
+	}
+	delete tile;
+	*/
+	
+    const string filename = getTileFilename(coordinate, dirname, "terrain");
     if( !command->resume || !fileExists(filename) ) {
       TerrainTile *tile = *iter;
       const string temp_filename = concat(filename, ".tmp");
 
-      tile->writeFile(temp_filename.c_str());
+	  if (command->compress)
+	  {
+		  tile->writeFile(temp_filename.c_str());
+	  } 
+	  else
+	  {
+		  FILE * fp = fopen(temp_filename.c_str(), "wb");
+		  if (fp != NULL)
+		  {
+			  tile->writeFile(fp);
+			  fclose(fp);
+			  fp = NULL;
+		  }
+	  }
       delete tile;
 
       if (VSIRename(temp_filename.c_str(), filename.c_str()) != 0) {
         throw new CTBException("Could not rename temporary file");
       }
     }
-
     currentIndex = incrementIterator(iter, currentIndex);
-    showProgress(currentIndex, filename);
+    //showProgress(currentIndex, filename);
   }
 }
 
@@ -429,7 +538,7 @@ buildTerrain(const TerrainTiler &tiler, TerrainBuild *command) {
  * This function is designed to be run in a separate thread.
  */
 static int
-runTiler(TerrainBuild *command, Grid *grid) {
+runTiler(TerrainBuild *command, ctb::Grid *grid) {
   GDALDataset  *poDataset = (GDALDataset *) GDALOpen(command->getInputFilename(), GA_ReadOnly);
   if (poDataset == NULL) {
     cerr << "Error: could not open GDAL dataset" << endl;
@@ -470,15 +579,22 @@ main(int argc, char *argv[]) {
   command.option("-n", "--creation-option <option>", "specify a GDAL creation option for the output dataset in the form NAME=VALUE. Can be specified multiple times. Not valid for Terrain tiles.", TerrainBuild::addCreationOption);
   command.option("-z", "--error-threshold <threshold>", "specify the error threshold in pixel units for transformation approximation. Larger values should mean faster transforms. Defaults to 0.125", TerrainBuild::setErrorThreshold);
   command.option("-m", "--warp-memory <bytes>", "The memory limit in bytes used for warp operations. Higher settings should be faster. Defaults to a conservative GDAL internal setting.", TerrainBuild::setWarpMemory);
+  command.option("-g", "--gzip-compress <gzip>", "Do gzip compress file", TerrainBuild::setCompress);
   command.option("-R", "--resume", "Do not overwrite existing files", TerrainBuild::setResume);
   command.option("-q", "--quiet", "only output errors", TerrainBuild::setQuiet);
   command.option("-v", "--verbose", "be more noisy", TerrainBuild::setVerbose);
+  command.option("-w", "--water-mask <dir>", "-specify the water mask directory for the tiles ", TerrainBuild::setWaterMaskDir);
+
 
   // Parse and check the arguments
   command.parse(argc, argv);
   command.check();
 
-  GDALAllRegister();
+  //PIE_SetWorkPath("D:/code/PIE-SVN/PIE-Map-Tools/terrain-builder/thirdparty/PIE");
+  //PIE_Init();
+
+  //globalTileSorage = PIE_TileStorage_Create();
+  //PIE_TileStorage_FromConfigFile(globalTileSorage, "D:/gisdata/pieterrain/pieterrain.xml");
 
   // Set the output type
   if (command.verbosity > 1) {
@@ -498,10 +614,10 @@ main(int argc, char *argv[]) {
   }
 
   // Define the grid we are going to use
-  Grid grid;
+  ctb::Grid grid;
   if (strcmp(command.profile, "geodetic") == 0) {
     int tileSize = (command.tileSize < 1) ? 65 : command.tileSize;
-    grid = GlobalGeodetic(tileSize);
+    grid = GlobalGeodetic(tileSize, true);
   } else if (strcmp(command.profile, "mercator") == 0) {
     int tileSize = (command.tileSize < 1) ? 256 : command.tileSize;
     grid = GlobalMercator(tileSize);
@@ -516,7 +632,7 @@ main(int argc, char *argv[]) {
 
   // Instantiate the threads using futures from a packaged_task
   for (int i = 0; i < threadCount ; ++i) {
-    packaged_task<int(TerrainBuild *, Grid *)> task(runTiler); // wrap the function
+    packaged_task<int(TerrainBuild *, ctb::Grid *)> task(runTiler); // wrap the function
     tasks.push_back(task.get_future());                        // get a future
     thread(move(task), &command, &grid).detach(); // launch on a thread
   }

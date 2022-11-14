@@ -31,6 +31,11 @@
 
 using namespace ctb;
 
+bool Terrain::Compress = false;
+bool Terrain::bUseWaterMask = false;
+std::string Terrain::WaterMaskDir = "";
+int Terrain::WaterMaskZoom = 11;
+
 Terrain::Terrain():
   mHeights(TILE_CELL_SIZE),
   mChildren(0)
@@ -44,7 +49,20 @@ Terrain::Terrain():
 Terrain::Terrain(const char *fileName):
   mHeights(TILE_CELL_SIZE)
 {
-  readFile(fileName);
+	if (Terrain::Compress)
+	{
+		readFile(fileName);
+	} 
+	else
+	{
+		FILE * fp = fopen(fileName, "rb");
+		if (fp != NULL)
+		{
+			readFile(fp);
+			fclose(fp);
+			fp = NULL;
+		}
+	}
 }
 
 /**
@@ -83,6 +101,40 @@ Terrain::Terrain(FILE *fp):
   default:
     throw CTBException("Not contain enough water mask data");
   }
+}
+
+void Terrain::readFile(FILE *fp)
+{
+	unsigned char bytes[2];
+	int count = 0;
+
+	// Get the height data from the file handle
+	while (count < TILE_CELL_SIZE && fread(bytes, 2, 1, fp) != 0) {
+		/* adapted from
+		<http://stackoverflow.com/questions/13001183/how-to-read-little-endian-integers-from-file-in-c> */
+		mHeights[count++] = bytes[0] | (bytes[1] << 8);
+	}
+
+	// Check we have the expected amound of height data
+	if (count + 1 != TILE_CELL_SIZE) {
+		throw CTBException("Not enough height data");
+	}
+
+	// Get the child flag
+	if (fread(&(mChildren), 1, 1, fp) != 1) {
+		throw CTBException("Could not read child tile byte");
+	}
+
+	// Get the water mask
+	mMaskLength = fread(mMask, 1, MASK_CELL_SIZE, fp);
+	switch (mMaskLength) {
+	case MASK_CELL_SIZE:
+		break;
+	case 1:
+		break;
+	default:
+		throw CTBException("Not contain enough water mask data");
+	}
 }
 
 /**
@@ -299,6 +351,19 @@ Terrain::getHeights() const {
 std::vector<i_terrain_height> &
 Terrain::getHeights() {
   return mHeights;
+}
+
+char ctb::Terrain::getChildren() const
+{
+	return mChildren;
+}
+
+std::vector<char> ctb::Terrain::getMask() const
+{
+	std::vector<char> mask;
+	for (int i = 0; i < mMaskLength; ++i)
+		mask.push_back(mMask[i]);
+	return mask;
 }
 
 TerrainTile::TerrainTile(const TileCoordinate &coord):

@@ -54,6 +54,9 @@ public:
   Terrain(FILE *fp);
 
   /// Read terrain data from the filesystem
+  void readFile(FILE *fp);
+
+  /// Read terrain data from the filesystem
   void
   readFile(const char *fileName);
 
@@ -137,12 +140,22 @@ public:
   std::vector<i_terrain_height> &
   getHeights();
 
+  char getChildren() const;
+  std::vector<char> getMask() const;
+
+public:
+	static bool Compress;
+    static bool bUseWaterMask;
+    static std::string WaterMaskDir;
+    static int WaterMaskZoom;
+
 protected:
   /// The terrain height data
   std::vector<i_terrain_height> mHeights; // replace with `std::array` in C++11
 
   /// The number of height cells within a terrain tile
-  static const unsigned short int TILE_CELL_SIZE = TILE_SIZE * TILE_SIZE;
+  //static const unsigned short int TILE_CELL_SIZE = TILE_SIZE * TILE_SIZE;
+  static const int TILE_CELL_SIZE = TILE_SIZE * TILE_SIZE;
 
   /// The number of water mask cells within a terrain tile
   static const unsigned int MASK_CELL_SIZE = MASK_SIZE * MASK_SIZE;

@@ -379,6 +379,12 @@ GDALTiler::createRasterTile(double (&adfGeoTransform)[6]) const {
     throw CTBException("Could not set projection on VRT");
   }
 
+  //GDALRasterBandH hBand = GDALGetRasterBand(hDstDS, 1);
+  //int rt = 0;
+  //double value = GDALGetRasterNoDataValue(hBand, &rt);
+  //GDALSetRasterNoDataValue(hBand, 0);
+  //double value1 = GDALGetRasterNoDataValue(hBand, &rt);
+
   // If uncommenting the following line for debug purposes, you must also `#include "vrtdataset.h"`
   //std::cout << "VRT: " << CPLSerializeXMLTree(((VRTWarpedDataset *) hDstDS)->SerializeToXML(NULL)) << std::endl;
 

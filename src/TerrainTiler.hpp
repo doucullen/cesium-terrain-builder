@@ -61,6 +61,13 @@ public:
   TerrainTile *
   createTile(const TileCoordinate &coord) const override;
 
+  //calBounds(const TileCoordinate &coord) 给一个xyz计算返回bounds 坐标是web墨卡托的
+  CRSBounds calBounds(const TileCoordinate& coord) const;
+
+  //给一个大于mask的xyz，返回他对应mask（11级）上256*256的terrain的高度图解析结果
+  float* getMaskHeights(const TileCoordinate& coord) const; //这里记得要在使用完后释放掉别造成内存泄露
+
+
 protected:
 
   /// Create a `GDALTile` representing the required terrain tile data
