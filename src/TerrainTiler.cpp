@@ -32,11 +32,20 @@ ctb::TerrainTiler::createTile(const TileCoordinate &coord) const {
   GDALRasterBand *heightsBand = rasterTile->dataset->GetRasterBand(1);
 
   // Copy the raster data into an array
+
   float rasterHeights[TerrainTile::TILE_CELL_SIZE];
-  if (heightsBand->RasterIO(GF_Read, 0, 0, TILE_SIZE, TILE_SIZE,
-                            (void *) rasterHeights, TILE_SIZE, TILE_SIZE, GDT_Float32,
-                            0, 0) != CE_None) {
-    throw CTBException("Could not read heights from raster");
+  int xsize = heightsBand->GetXSize();
+  int ysize = heightsBand->GetYSize();
+  if (xsize >= TILE_SIZE && ysize >= TILE_SIZE)
+  {
+
+	  rasterTile->dataset->RasterIO(GF_Read, 0, 0, TILE_SIZE, TILE_SIZE,
+		  (void*)rasterHeights, TILE_SIZE, TILE_SIZE, GDT_Float32, 1, nullptr, 0, 0, 0);
+  }
+  else
+  {
+
+	  printf("ysize = %d,xsize = %d\n", ysize, xsize);
   }
 
   delete rasterTile;
@@ -46,10 +55,33 @@ ctb::TerrainTiler::createTile(const TileCoordinate &coord) const {
   // value is the number of 1/5 meter units above -1000 meters.
   // TODO: try doing this using a VRT derived band:
   // (http://www.gdal.org/gdal_vrttut.html)
+  GDALRasterBand* RasterBand = poDataset->GetRasterBand(1);
+  double dataValue = RasterBand->GetNoDataValue();
   for (unsigned short int i = 0; i < TerrainTile::TILE_CELL_SIZE; i++) {
-    terrainTile->mHeights[i] = (i_terrain_height) ((rasterHeights[i] + 1000) * 5);
+	  //printf("\nresult = %d\n", terrainTile->mHeights[i]);
+	  if (rasterHeights[i] == dataValue)
+	  {
+		  terrainTile->mHeights[i] = (i_terrain_height)5000;
+	  }
+	  else if (0 < rasterHeights[i] && rasterHeights[i] < 20)
+	  {
+		  terrainTile->mHeights[i] = (i_terrain_height)((rasterHeights[i] + 1000) * 5);
+	  }
+	  else if (rasterHeights[i] < 0)
+	  {
+		  terrainTile->mHeights[i] = (i_terrain_height)((rasterHeights[i] + 1000) * 5);
+	  }
+	  else
+	  {
+		  terrainTile->mHeights[i] = (i_terrain_height)((rasterHeights[i] + 1000) * 5);
+	  }
+	  if (terrainTile->mHeights[i] != 5000)
+	  {
+		 // printf("\nresult = %d\n", terrainTile->mHeights[i]);
+		  terrainTile->mHeights[i] = (i_terrain_height)5000;
+		 // printf("1111111111111");
+	  }
   }
-
   // If we are not at the maximum zoom level we need to set child flags on the
   // tile where child tiles overlap the dataset bounds.
   if (coord.zoom != maxZoomLevel()) {
