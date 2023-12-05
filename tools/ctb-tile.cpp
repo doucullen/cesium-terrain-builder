@@ -40,6 +40,8 @@
 #include <thread>
 #include <mutex>
 #include <future>
+#include <sqlite3.h>
+#include <filesystem>
 
 #include "cpl_multiproc.h"      // for CPLGetNumCPUs
 #include "cpl_vsi.h"            // for virtual filesystem
@@ -50,6 +52,7 @@
 #include "GlobalMercator.hpp"
 #include "RasterIterator.hpp"
 #include "TerrainIterator.hpp"
+#include "TerrainTiler.hpp"
 
 //#include "API/PIEEnvironment.h"
 //#include "API/PIETileStorage.h"
@@ -160,30 +163,45 @@ public:
           size_t pos = std::string(ctb::Terrain::WaterMaskDir).find("_alllayers");
           if (pos != std::string::npos) {
               std::string inputPath(ctb::Terrain::WaterMaskDir);
-              // ??è? _alllayers oó??μ??·??
+              // 截取 _alllayers 后面的路径
               std::string zoomStr = inputPath.substr(pos + 10);
 
-              // è￥μ??·???Dμ? '/' ×?·?
+              //判断zoom层级上一层的目录名称不是_alllayers 如果slash_pos = 0证明上一层是_alllayers不是allyers带后缀
+              size_t slash_pos = zoomStr.find("/");
+              if (slash_pos != std::string::npos && slash_pos != 0)
+              {
+                  //如果海洋掩膜对应的输入目录里zoom层级上一层的目录名称不是_alllayers，则认为输入异常，报错！！！
+                  std::cout << "WARRNING: WaterMaskDir Format must be _alllayers + zoom" + Terrain::WaterMaskDir << std::endl;
+              }
+
+              // 去掉路径中的 '/' 字符
               zoomStr.erase(std::remove(zoomStr.begin(), zoomStr.end(), '/'), zoomStr.end());
 
-              // ?ì2éê?·??éò?×a???aêy×?
+              // 检查是否可以转换为数字
               if (!zoomStr.empty() && std::all_of(zoomStr.begin(), zoomStr.end(), ::isdigit)) {
-                  // ?éò?×a???aêy×?￡?×a??2￠éè???? Terrain::WaterMaskZoom
+                  // 可以转换为数字，转换并设置给 Terrain::WaterMaskZoom
                   Terrain::WaterMaskZoom = std::stoi(zoomStr);
 
                   ctb::Terrain::bUseWaterMask = true;
               }
 
-              // °üo? _alllayers ???t?D￡???è? _alllayers ???°μ??·??
-              std::string pathBeforeAllLayers = std::string(ctb::Terrain::WaterMaskDir).substr(0, pos + 10); // ?óé? "_alllayers/"
-              // pathBeforeAllLayers ???ú°üo? _alllayers ?aò?2?????
-              // ctb::Terrain::WaterMaskDir ò2±??üD??a pathBeforeAllLayers
+              // 包含 _alllayers 文件夹，截取 _alllayers 之前的路径
+              std::string pathBeforeAllLayers = std::string(ctb::Terrain::WaterMaskDir).substr(0, pos + 10); // 加上 "_alllayers/"
+              // pathBeforeAllLayers 现在包含 _alllayers 这一层目录
+              // ctb::Terrain::WaterMaskDir 也被更新为 pathBeforeAllLayers
               static_cast<TerrainBuild*>(Command::self(command))->waterMaskDir = pathBeforeAllLayers.c_str();
               ctb::Terrain::WaterMaskDir = pathBeforeAllLayers.c_str();
+
           }
       }
       //ctb::Terrain::WaterMaskDir = static_cast<TerrainBuild*>(Command::self(command))->waterMaskDir;
 
+  }
+
+  static void
+      setUseMBTiles(command_t* command) {
+      static_cast<TerrainBuild*>(Command::self(command))->bUseMbtiles = atoi(command->arg);
+      ctb::Terrain::bUseMbtiles = static_cast<TerrainBuild*>(Command::self(command))->bUseMbtiles;
   }
 
   static void
@@ -259,8 +277,9 @@ public:
     verbosity;
 
   bool compress;
-  bool useWaterMask;
+  bool useWaterMask = false;
   bool resume;
+  bool bUseMbtiles = false;
 
   //std::string waterMaskDir;
   CPLStringList creationOptions;
@@ -313,6 +332,27 @@ getTileFilename(const TileCoordinate *coord, const string dirname, const char *e
 
   return filename;
 }
+
+//ddx:获取mbtiles文件的文件路径
+static string
+getMbtilesname(const string dirname, const char* extension)
+{
+    static mutex mutex;
+
+    VSIStatBufL stat;
+    string filename = dirname;
+
+    lock_guard<std::mutex> lock(mutex);
+
+    filename += "Tile";
+    if (extension != NULL) {
+        filename += ".";
+        filename += extension;
+    }
+
+    return filename;
+}
+
 
 /**
  * Increment a TilerIterator whilst cooperating between threads
@@ -469,6 +509,7 @@ static unsigned char *createTileBuffer(
 	return data;
 }
 
+
 /// Output terrain tiles represented by a tiler to a directory
 static void
 buildTerrain(const TerrainTiler &tiler, TerrainBuild *command) {
@@ -481,54 +522,57 @@ buildTerrain(const TerrainTiler &tiler, TerrainBuild *command) {
   setIteratorSize(iter);
   while (!iter.exhausted()) {
     const TileCoordinate *coordinate = iter.GridIterator::operator*();
-	//TerrainTile *tile = *iter;
-
-	/*
-	PIE_TileStorage_SetFileDirectory(globalTileSorage, dirname.data());
-
-	size_t size = 0;
-	unsigned char *data = createTileBuffer(tile->getHeights(), tile->getChildren(), tile->getMask(), size);
-	if (size != 0 && data) {
-		int zoom = coordinate->zoom;
-		int row = coordinate->y;
-		if (command->tms)
-		{
-			row = (1 << zoom) - coordinate->y - 1;
-		}
-		int col = coordinate->x;
-		PIE_TileStorage_SetTileData(globalTileSorage, zoom, row, col, data, size);
-		delete data;
-	}
-	delete tile;
-	*/
 	
-    const string filename = getTileFilename(coordinate, dirname, "terrain");
-    if( !command->resume || !fileExists(filename) ) {
-      TerrainTile *tile = *iter;
-      const string temp_filename = concat(filename, ".tmp");
+    // todo:重写writeFile函数 用一个单例 一个锁 mbtiles写的时候加上锁  ，写mbTile需要用到的二进制数据信息在tile里面，coordinate里面有行列号层级
+    //是否重写
+    if (command->bUseMbtiles)
+    {
 
-	  if (command->compress)
-	  {
-		  tile->writeFile(temp_filename.c_str());
-	  } 
-	  else
-	  {
-		  FILE * fp = fopen(temp_filename.c_str(), "wb");
-		  if (fp != NULL)
-		  {
-			  tile->writeFile(fp);
-			  fclose(fp);
-			  fp = NULL;
-		  }
-	  }
-      delete tile;
+        if (!command->resume) {
 
-      if (VSIRename(temp_filename.c_str(), filename.c_str()) != 0) {
-        throw new CTBException("Could not rename temporary file");
-      }
+            TerrainTile* tile = *iter;
+
+            //默认文件已经存在则直接继续写瓦片文件即可
+            //获取当瓦片输出的二进制数据，并输出
+            std::vector<uint8_t> buffer = tile->writeMBTIlesFile();
+            Singleton::getInstance().WriteTile(coordinate->zoom, coordinate->x, coordinate->y, buffer);
+            std::cout << "writeMBTIlesFile  " + std::to_string(coordinate->zoom) + "  " + std::to_string(coordinate->x) + "  " + std::to_string(coordinate->y) <<endl;
+
+            delete tile;
+        }
     }
+    else
+    {
+        //不生成mbtiles的文件，使用原来的格式
+        const string filename = getTileFilename(coordinate, dirname, "terrain");
+        std::cout << "writeTerrainFile  " + std::to_string(coordinate->zoom) + "  " + std::to_string(coordinate->x) + "  " + std::to_string(coordinate->y) << endl;
+        if (!command->resume || !fileExists(filename)) {
+            TerrainTile* tile = *iter;
+            const string temp_filename = concat(filename, ".tmp");
+
+            if (command->compress)
+            {
+                tile->writeFile(temp_filename.c_str());
+            }
+            else
+            {
+                FILE* fp = fopen(temp_filename.c_str(), "wb");
+                if (fp != NULL)
+                {
+                    tile->writeFile(fp);
+                    fclose(fp);
+                    fp = NULL;
+                }
+            }
+            delete tile;
+
+            if (VSIRename(temp_filename.c_str(), filename.c_str()) != 0) {
+                throw new CTBException("Could not rename temporary file");
+            }
+        }
+    }
+
     currentIndex = incrementIterator(iter, currentIndex);
-    //showProgress(currentIndex, filename);
   }
 }
 
@@ -583,7 +627,8 @@ main(int argc, char *argv[]) {
   command.option("-R", "--resume", "Do not overwrite existing files", TerrainBuild::setResume);
   command.option("-q", "--quiet", "only output errors", TerrainBuild::setQuiet);
   command.option("-v", "--verbose", "be more noisy", TerrainBuild::setVerbose);
-  command.option("-w", "--water-mask <dir>", "-specify the water mask directory for the tiles ", TerrainBuild::setWaterMaskDir);
+  command.option("-w", "--water-mask <dir>", "-specify the water mask directory for the tiles , the Dir befor zoomDir Name must be /_alllayers/", TerrainBuild::setWaterMaskDir);
+  command.option("-b", "--mbtiles <mbtiles>", "Use MBTiles format for output. Specify the MBTiles file name.", TerrainBuild::setUseMBTiles);
 
 
   // Parse and check the arguments
@@ -630,6 +675,49 @@ main(int argc, char *argv[]) {
   vector<future<int>> tasks;
   int threadCount = (command.threadCount > 0) ? command.threadCount : CPLGetNumCPUs();
 
+  //如果使用mbtiles类型的文件，在这里创建
+  if (command.bUseMbtiles)
+  {
+      const string dirname = string(command.outputDir) + osDirSep;
+      const string mbTileFileName = getMbtilesname(dirname, "mbtiles");
+      if (!fileExists(mbTileFileName))
+      {
+          //如果文件不存在说明是该层级的第一个瓦片，需要初始化一下db还有文件名
+          Singleton::getInstance().CreatMBTiles(mbTileFileName);
+          Singleton::getInstance().WriteTileMetadata();
+      }
+      else
+      {
+          if (!command.resume)
+          {
+              //如果覆盖现有文件，先删除再初始化
+              if (std::remove(mbTileFileName.c_str()) != 0) {
+                  std::cerr << "Error deleting file" << std::endl; // 如果删除文件出错，输出错误信息
+              }
+              else {
+                  std::cout << "File successfully deleted" << std::endl; // 删除成功
+              }
+
+              Singleton::getInstance().CreatMBTiles(mbTileFileName);
+              Singleton::getInstance().WriteTileMetadata();
+          }
+      }
+
+  }
+  std::cout << "InputInfo : " << std::endl;
+  std::cout << "InputFIleFile = " + std::string(argv[argc - 1]) << std::endl; //打印输出目录作为cmd窗口的提示
+  std::cout << "OutputFile = " + std::string(command.outputDir) << std::endl; //打印输出目录作为cmd窗口的提示
+  std::cout << "TILE_SIZE = " + std::to_string(TILE_SIZE) << std::endl;//打印TILE_SIZE作为cmd窗口的提示
+  if (ctb::Terrain::bUseWaterMask)
+  {
+      std::cout << "WaterMaskDir = " + Terrain::WaterMaskDir << std::endl;//打印WaterMaskDir作为cmd窗口的提示
+
+  }
+  else
+  {
+      std::cout << "bUseWaterMask = false" << std::endl;//打印bUseWaterMask作为cmd窗口的提示
+  }
+
   // Instantiate the threads using futures from a packaged_task
   for (int i = 0; i < threadCount ; ++i) {
     packaged_task<int(TerrainBuild *, ctb::Grid *)> task(runTiler); // wrap the function
@@ -653,3 +741,5 @@ main(int argc, char *argv[]) {
 
   return 0;
 }
+
+

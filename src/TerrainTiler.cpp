@@ -74,23 +74,36 @@ ctb::TerrainTiler::createTile(const TileCoordinate &coord) const {
 
   if (coord.zoom < maskZoom  || !Terrain::bUseWaterMask)   //如果要切的层级比掩膜还要大，或者没有输入有效的掩膜参数  则执行原来的逻辑
   {
+      ////这个if里面是小于maskZoom不做处理，以下是测试内容
+      //float max = 0, min = 0;
+      //  for (int i = 0; i < TerrainTile::TILE_CELL_SIZE; i++) {
+      //    terrainTile->mHeights[i] = (i_terrain_height) ((rasterHeights[i] + 1000) * 5);
 
+      //    //debug：
 
-      //小于maskZoom不做处理
-        for (int i = 0; i < TerrainTile::TILE_CELL_SIZE; i++) {
-          terrainTile->mHeights[i] = (i_terrain_height) ((rasterHeights[i] + 1000) * 5);
+      //    HeightBuffer[i] = rasterHeights[i];
+      //    oriBuffer[i] = (i_terrain_height)((rasterHeights[i] + 1000) * 5);
+      //    signedShortBuffer[i] = (short)((rasterHeights[i] + 1000) * 5);
 
-          //debug：
-          HeightBuffer[i] = rasterHeights[i];
-          oriBuffer[i] = (i_terrain_height)((rasterHeights[i] + 1000) * 5);
-          signedShortBuffer[i] = (short)((rasterHeights[i] + 1000) * 5);
-        }
+      //    
+      //    if (HeightBuffer[i] > max)
+      //    {
+      //        max = HeightBuffer[i];
+      //    }
+      //    max = max > HeightBuffer[i] ? max : HeightBuffer[i];
+      //    min = min < HeightBuffer[i] ? min : HeightBuffer[i];
+      //  }
 
-        //debug反解析回来看看对不对
-        for (int i = 0; i < TerrainTile::TILE_CELL_SIZE; i++) {
-            preasBuffer[i] = (oriBuffer[i] / 5) - 1000;
-            preasSignedShortBuffer[i] = (signedShortBuffer[i] / 5) - 1000;
-        }
+      //  //if (min < -653 || max > 3917)
+      //  //{
+      //  //    int a = 0;
+      //  //}
+
+      //  //debug反解析回来看看对不对
+      //  for (int i = 0; i < TerrainTile::TILE_CELL_SIZE; i++) {
+      //      preasBuffer[i] = (oriBuffer[i] / 5) - 1000;
+      //      preasSignedShortBuffer[i] = (signedShortBuffer[i] / 5) - 1000;
+      //  }
 
         delete HeightBuffer;
         delete oriBuffer;
@@ -354,12 +367,12 @@ ctb::TerrainTiler::getMaskHeights(const TileCoordinate& tileCoord) const
 
     // mask 的terrain缓存的地址:文件结构存储顺序是z/x/y 
     bool bUseWaterMask_debug = Terrain::bUseWaterMask;
-    const char* maskPath_Debug = Terrain::WaterMaskDir.c_str();
+    const char* maskPath_Debug = "F:/Heightmap_Terrain_Format/Terrain_Output/taiwan90mDEM_mask256/_alllayers/";//Terrain::WaterMaskDir.c_str()
     int maskZoom_debug = Terrain::WaterMaskZoom;
-    const char* mask_path = "F:/Heightmap_Terrain_Format/Terrain_Output/taiwan90mDEM_mask256/_alllayers/";
+    const char* mask_path = Terrain::WaterMaskDir.c_str();
     // 使用字符串流来构建 maskTerrainPath
     std::stringstream maskTerrainPathStream;
-    maskTerrainPathStream << mask_path << maskCoordinate.zoom << "/" << maskCoordinate.x << "/" << maskCoordinate.y << ".terrain";
+    maskTerrainPathStream << mask_path << "/" << maskCoordinate.zoom << "/" << maskCoordinate.x << "/" << maskCoordinate.y << ".terrain";
 
     // 从字符串流中获取构建好的 maskTerrainPath
     std::string maskTerrainPath = maskTerrainPathStream.str();
@@ -368,7 +381,8 @@ ctb::TerrainTiler::getMaskHeights(const TileCoordinate& tileCoord) const
 
     // 检查文件是否成功打开
     if (!maskFile) {
-        throw CTBException(" ddx_ErrorInfo: Failed to open the mask terrain file");
+        std::string errorMessage = "ErrorInfo:  Failed to open the mask terrain file , maskFilePath: " + maskTerrainPath;
+        throw CTBException(errorMessage.c_str());
     }
 
     // 获取文件大小
@@ -387,11 +401,11 @@ ctb::TerrainTiler::getMaskHeights(const TileCoordinate& tileCoord) const
     // 关闭文件
     fclose(maskFile);
 
-    //ddx_degbug:调试过程中把直接读取的每个值也记录下来
-    unsigned char* ucharBuffer = new unsigned char[fileSize];
-    for (long i = 0; i < fileSize; i++) {
-        ucharBuffer[i] = static_cast<unsigned char>(buffer[i]);
-    }
+    ////ddx_degbug:调试过程中把直接读取的每个值也记录下来
+    //unsigned char* ucharBuffer = new unsigned char[fileSize];
+    //for (long i = 0; i < fileSize; i++) {
+    //    ucharBuffer[i] = static_cast<unsigned char>(buffer[i]);
+    //}
 
 
     // 这里假设每两个字节表示一个16位的有符号短整数，且数据是小端字节序
@@ -405,9 +419,9 @@ ctb::TerrainTiler::getMaskHeights(const TileCoordinate& tileCoord) const
         unsigned short value = (unsigned short)(buffer[byteOffset] | (buffer[byteOffset + 1] << 8));
         short signedShortValue = (short)(buffer[byteOffset] | (buffer[byteOffset + 1] << 8));
         
-        //ddx_degbug:调试过程中把高度图还原前的每个值也记录下来
-        debug_short_MaskHeightsArray[i] = value;
-        debug_short_MaskHeightsArray[i] = signedShortValue;
+        ////ddx_degbug:调试过程中把高度图还原前的每个值也记录下来
+        //debug_short_MaskHeightsArray[i] = value;
+        //debug_short_MaskHeightsArray[i] = signedShortValue;
 
         // 将解析后的值存储到 MaskHeightsArray （/5 -1000）转换成真实的高度数据，得到一个65535的数组
         //MaskHeightsArray[i] = static_cast<float>((value / 5) - 1000);
@@ -416,7 +430,7 @@ ctb::TerrainTiler::getMaskHeights(const TileCoordinate& tileCoord) const
 
     //切记防止内存泄漏
     delete[] buffer;
-    // delete[] debug_short_MaskHeightsArray; // 如果不再需要可以释放
+    delete[] debug_short_MaskHeightsArray; // 如果不再需要可以释放
 
     return MaskHeightsArray;
 }
